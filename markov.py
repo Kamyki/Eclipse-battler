@@ -416,6 +416,7 @@ def main():
             pi[state] = mc.pi[key]
     for (k, v) in sorted(pi.items(), key=lambda x: x[1], reverse=True):
         print(k, v, mc.states_rev[k])
+    return(p1)
 
 
 if __name__ == "__main__":
@@ -452,4 +453,4 @@ if __name__ == "__main__":
     # for k in res:
     #     if res2[k] == 0:
     #         print(k, res[k])
-    main()
+    result = main()

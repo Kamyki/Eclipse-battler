@@ -6,22 +6,51 @@
 </head>
 
 <body>
-  Pyodide test page <br>
-  Open your browser console to see Pyodide output
-  <script type="text/javascript">
+  <p>
+    You can execute any Python code. Just enter something in the box below and
+    click the button.
+  </p>
+  <input id="code" value="sum([1, 2, 3, 4, 5])" />
+  <button onclick="evaluatePython()">Run</button>
+  <br />
+  <br />
+  <div>Output:</div>
+  <textarea id="output" style="width: 100%;" rows="6" disabled></textarea>
+
+  <script>
+    const output = document.getElementById("output");
+    const code = document.getElementById("code");
+
+
+    function addToOutput(s) {
+      output.value += ">>>" + code.value + "\n" + s + "\n";
+    }
+
+    output.value = "Initializing...\n";
+    // init Pyodide
     async function main() {
       let pyodide = await loadPyodide();
-      await pyodide.loadPackage("micropip");
-      const micropip = pyodide.pyimport("micropip");
-      await micropip.install('discreteMarkovChain');
-      console.log(pyodide.runPython(`
-            import micropip
-            package_list = micropip.list()
-            print(package_list) 
-        `));
-      pyodide.runPython("print(1 + 2)");
+      await pyodide.runPythonAsync(`
+    from pyodide.http import pyfetch
+    response = await pyfetch("https://.../markov.py")
+    with open("script.py", "wb") as f:
+        f.write(await response.bytes())
+`)
+      pkg = pyodide.pyimport("script");
+      output.value += "Ready!\n";
+      return pyodide;
     }
-    main();
+    let pyodideReadyPromise = main();
+
+    async function evaluatePython() {
+      let pyodide = await pyodideReadyPromise;
+      try {
+        let output = pyodide.runPython(code.value);
+        addToOutput(output);
+      } catch (err) {
+        addToOutput(err);
+      }
+    }
   </script>
 </body>
 

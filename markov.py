@@ -5,7 +5,7 @@ from typing import Any, Dict, List, Tuple, NamedTuple, FrozenSet
 from collections import Counter, defaultdict
 from enum import Enum
 from math import prod
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass, field, replace, asdict
 from itertools import combinations, product, chain
 from copy import deepcopy, copy
 from scipy.sparse import coo_matrix
@@ -30,9 +30,9 @@ class ShipClass(Enum):
 
 @dataclass(frozen=True)
 class ShipState:
-    fired_cannons: bool = False
-    fired_missles: bool = False
-    regen_used: bool = False
+    fired_cannons: bool = field(repr=False, default=False)
+    fired_missles: bool = field(repr=False, default=False)
+    regen_used: bool = field(repr=False, default=False)
     count: int = 1
     damage: int = 0
 
@@ -145,11 +145,6 @@ class Ship:
         for dice_set in dices.items():
             for (k, v) in assign_dices(self, opposing_fleet, sum(self.missles) * count, dice_set).items():
                 results[make_state(k)] += v
-        # if  sum(dices.values()) != sum(results.values()):
-        # for r in results.items():
-        #     print(r)
-        # for r in dices.items():
-        #     print(r)
         return results
 
     def fire_cannons(self, sstate: ShipState, state) -> Dict[Any, int]:
@@ -166,14 +161,6 @@ class Ship:
         for dice_set in dices.items():
             for (k, v) in assign_dices(self, opposing_fleet, sum(self.cannons) * count, dice_set).items():
                 results[make_state(k)] += v
-        # print( sum(results.values()))
-        # print(sum(dices.values()))
-        # if  sum(dices.values()) != sum(results.values()):
-        #     for r in dices.items():
-        #         print(r)
-        #     for r in results.items():
-        #         print(r)
-        # assert sum(dices.values()) == sum(results.values())
         return results
 
     def regen_damage(self, sstate, state):
@@ -217,7 +204,7 @@ def assign_dices(ship, opposing_fleet, dice_count, dices):
             for ((target, (dice, power))) in ships[0]:
                 if fleet[target].count:
                     fleet[target] = damage(
-                        target, fleet[target], power, dice, ship.computer)
+                        target, fleet[target], power)
             succ_states[frozenset(
                 filter(lambda x: x[1].count, fleet.items()))] += dices[1]
     
@@ -230,42 +217,16 @@ def next_dice(dices):
             yield (dice, power+1, count)
         
 
-
-
-def assign_dices2(ship, opposing_fleet, dice_count, dices):
-    succ_states = defaultdict(int)
-    opposing_fleet = dict(opposing_fleet)
-    for ships in product(opposing_fleet, repeat=dice_count):
-        fleet = deepcopy(opposing_fleet)
-        for ship, (dice, power) in zip(ships, next_dice2(dices)):
-            if fleet[ship].count:
-                fleet[ship] = damage(
-                    ship, fleet[ship], power+1, dice, ship.computer)
-        succ_states[frozenset(
-            filter(lambda x: x[1].count, fleet.items()))] += dices[1]
-    return succ_states
-
-
-def next_dice2(dices):
-    for power in range(4):
-        for (dice, count) in dices[0][power]:
-            for _ in range(count):
-                yield (dice, power+1)
-        
-
-def damage(ship, sstate, power, dice, comp) -> ShipState:
-    if not ship.is_hit(dice, comp):
-        return sstate
+def damage(ship, sstate, power) -> ShipState:
+    if power > ship.armor and sstate.count > 1:
+        s = replace(sstate, count=sstate.count-1, damage=sstate.damage)
+        return s
+    if sstate.damage + power > ship.armor:
+        s = replace(sstate, count=sstate.count-1, damage=0)
+        return s
     else:
-        if power > ship.armor and sstate.count > 1:
-            s = replace(sstate, count=sstate.count-1, damage=sstate.damage)
-            return s
-        if sstate.damage + power > ship.armor:
-            s = replace(sstate, count=sstate.count-1, damage=0)
-            return s
-        else:
-            s = replace(sstate, damage=sstate.damage+power)
-            return s
+        s = replace(sstate, damage=sstate.damage+power)
+        return s
 
 
 def reset(state):
@@ -418,6 +379,16 @@ crus1 = Ship.cruser(defender=True,
                         'shield': 0})
 
 
+def print_fleet(d):
+    for (k, v) in d.items():
+        print(">>>>>>>>")
+        print(v)
+        print_dict(asdict(k))
+
+def print_dict(d):
+    for (k, v) in d.items():
+        print(k, v)
+
 def main():
     fleet_attack: Fleet = {
         inter1: ShipState(count=2),
@@ -431,48 +402,54 @@ def main():
     #mc.powerMethod(maxiter=1e5)
     mc.computePi('krylov')
 
+    print("Battle!")
+    print("Attacker:")
+    print_fleet(fleet_attack)
+    print("------------------")
+    print("Defender")
+    print_fleet(fleet_defence)
+    print("------------------")
+
     pi = {}
     for (key, state) in mc.mapping.items():
         if mc.pi[key] > 0.001:
             pi[state] = mc.pi[key]
     for (k, v) in sorted(pi.items(), key=lambda x: x[1], reverse=True):
         print(k, v, mc.states_rev[k])
-    print(sum(mc.pi))
-    print(sum(pi.values()))
 
 
 if __name__ == "__main__":
-    a = (frozenset({(inter1, ShipState(fired_cannons=False, fired_missles=True, regen_used=False, count=1, damage=0)),
-                    (dred1, ShipState(fired_cannons=False, fired_missles=False, regen_used=False, count=1, damage=0))}),
-         frozenset({(star1, ShipState(fired_cannons=True, fired_missles=False, regen_used=False, count=1, damage=2))}))
-    # print(reset(a))
-    opp =  frozenset({(star1, ShipState(fired_cannons=True, fired_missles=False, regen_used=False, count=2, damage=0)),
-                (crus1, ShipState(count=2))})
-    dices = inter1.missles.count(2).fire()
-    res = defaultdict(int)
-    for dice in dices.items():
-        for r in assign_dices(inter1, opp, 2 * sum(inter1.missles), dice).items():
-            res[r[0]] += r[1]
+    # a = (frozenset({(inter1, ShipState(fired_cannons=False, fired_missles=True, regen_used=False, count=1, damage=0)),
+    #                 (dred1, ShipState(fired_cannons=False, fired_missles=False, regen_used=False, count=1, damage=0))}),
+    #      frozenset({(star1, ShipState(fired_cannons=True, fired_missles=False, regen_used=False, count=1, damage=2))}))
+    # # print(reset(a))
+    # opp =  frozenset({(star1, ShipState(fired_cannons=True, fired_missles=False, regen_used=False, count=2, damage=0)),
+    #             (crus1, ShipState(count=2))})
+    # dices = inter1.missles.count(2).fire()
+    # res = defaultdict(int)
+    # for dice in dices.items():
+    #     for r in assign_dices(inter1, opp, 2 * sum(inter1.missles), dice).items():
+    #         res[r[0]] += r[1]
 
-    for r in res.items():
-        print(r)
-    res2 = defaultdict(int)
-    for dice in dices.items():
-        for r in assign_dices2(inter1, opp, 2 * sum(inter1.missles), dice).items():
-            res2[r[0]] += r[1]
+    # for r in res.items():
+    #     print(r)
+    # res2 = defaultdict(int)
+    # for dice in dices.items():
+    #     for r in assign_dices2(inter1, opp, 2 * sum(inter1.missles), dice).items():
+    #         res2[r[0]] += r[1]
         
-    print()
-    print()
-    for r in res2.items():
-        print(r)
+    # print()
+    # print()
+    # for r in res2.items():
+    #     print(r)
 
-    print()
-    print()
+    # print()
+    # print()
 
-    for k in res:
-        print(res[k], res2[k], res2[k]/res[k])
+    # for k in res:
+    #     print(res[k], res2[k], res2[k]/res[k])
 
-    for k in res:
-        if res2[k] == 0:
-            print(k, res[k])
-    # main()
+    # for k in res:
+    #     if res2[k] == 0:
+    #         print(k, res[k])
+    main()

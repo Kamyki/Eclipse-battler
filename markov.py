@@ -1,7 +1,7 @@
 import numpy as np
 from discreteMarkovChain import markovChain
 
-from typing import Any, Dict, List, Tuple, NamedTuple
+from typing import Any, Dict, List, Tuple, NamedTuple, FrozenSet
 from collections import Counter, defaultdict
 from enum import Enum
 from math import prod
@@ -14,6 +14,7 @@ from scipy.sparse import csgraph
 from scipy import sparse
 import numpy as np
 import time
+
 
 
 class ShipClass(Enum):
@@ -29,7 +30,7 @@ class ShipClass(Enum):
 
 @dataclass(frozen=True)
 class ShipState:
-    fired_canons: bool = False
+    fired_cannons: bool = False
     fired_missles: bool = False
     regen_used: bool = False
     count: int = 1
@@ -129,13 +130,21 @@ class Ship:
     def has_regen(self):
         return self.regen != 0
 
-    def fire_missles(self, opposing_fleet, count):
-        opposing_fleet = dict(opposing_fleet)
+    def fire_missles(self, sstate: ShipState, state: FrozenSet):
+        opposing_fleet =  state[0] if self.defender else state[1]
+        my_fleet = dict(state[1] if self.defender else state[0])
+        
+        my_fleet[self] = replace(sstate, fired_missles=True)
+        if self.defender:
+            make_state = lambda x: (x, frozenset(my_fleet.items()))
+        else:
+            make_state = lambda x: (frozenset(my_fleet.items()), x)
+        count = sstate.count
         dices = self.missles.count(count).fire()
         results = defaultdict(int)
         for dice_set in dices.items():
             for (k, v) in assign_dices(self, opposing_fleet, sum(self.missles) * count, dice_set).items():
-                results[k] += v
+                results[make_state(k)] += v
         # if  sum(dices.values()) != sum(results.values()):
         # for r in results.items():
         #     print(r)
@@ -143,13 +152,20 @@ class Ship:
         #     print(r)
         return results
 
-    def fire_cannons(self, opposing_fleet, count):
-        opposing_fleet = dict(opposing_fleet)
+    def fire_cannons(self, sstate: ShipState, state) -> Dict[Any, int]:
+        opposing_fleet =  state[0] if self.defender else state[1]
+        my_fleet = dict(state[1] if self.defender else state[0])
+        my_fleet[self] = replace(sstate, fired_cannons=True)
+        if self.defender:
+            make_state = lambda x: (x, frozenset(my_fleet.items()))
+        else:
+            make_state = lambda x: (frozenset(my_fleet.items()), x)
+        count = sstate.count
         dices = self.cannons.count(count).fire()
         results = defaultdict(int)
         for dice_set in dices.items():
             for (k, v) in assign_dices(self, opposing_fleet, sum(self.cannons) * count, dice_set).items():
-                results[k] += v
+                results[make_state(k)] += v
         # print( sum(results.values()))
         # print(sum(dices.values()))
         # if  sum(dices.values()) != sum(results.values()):
@@ -160,12 +176,17 @@ class Ship:
         # assert sum(dices.values()) == sum(results.values())
         return results
 
-    def regen_damage(self, my_fleet):
+    def regen_damage(self, sstate, state):
+        opposing_fleet =  state[0] if self.defender else state[1]
+        my_fleet = state[1] if self.defender else state[0]
         my_fleet = dict(my_fleet)
-        state = my_fleet[self]
-        f = deepcopy(my_fleet)
-        f[self] = replace(state, damage=max(0, state.damage-self.regen), regen_used=True)
-        result = defaultdict(float, {frozenset(f.items()): 1.0})
+        my_fleet[self] = replace(sstate, damage=max(0, sstate.damage-self.regen), regen_used=True)
+        if self.defender:
+            new_state = (opposing_fleet, frozenset(my_fleet.items()))
+        else:
+            new_state = (frozenset(my_fleet.items()), opposing_fleet)
+
+        result = defaultdict(float, {new_state: 1.0})
         return result
 
     def is_hit(self, dice, comp):
@@ -175,29 +196,62 @@ class Ship:
         return 6 - comp - self.shield
 
 
+State = tuple[FrozenSet[tuple[Ship, ShipClass]], FrozenSet[tuple[Ship, ShipClass]]]
+
+
+
 def assign_dices(ship, opposing_fleet, dice_count, dices):
     succ_states = defaultdict(int)
-    for ships in product(opposing_fleet, repeat=dice_count):
-        i = 0
-        fleet = deepcopy(opposing_fleet)
-        for power in range(4):
-            for (dice, count) in dices[0][power]:
-                for _ in range(count):
-                    ship = ships[i]
-                    i += 1
-                    # print(dice)
-                    # print(f"befor {fleet[ship]=}")
-                    if fleet[ship].count:
-                        fleet[ship] = damage(
-                            ship, fleet[ship], power+1, dice, ship.computer)
-                    # print(f"after {fleet[ship]=}")
+    opposing_fleet = dict(opposing_fleet)
+    chosen_targets = []
+    for (dice, power, count) in next_dice(dices):
+        targets = list(map(lambda x: (x, (dice, power+1)),filter(lambda x: x.is_hit(dice, ship.computer), opposing_fleet)))
+        if len(targets) > 0:
+            chosen_targets.append(product(targets, repeat=count))
 
-        # print(fleet)
-        succ_states[frozenset(
-            filter(lambda x: x[1].count, fleet.items()))] += dices[1]
-        # print(f"{succ_states=}{dices=}")
+    if len(chosen_targets) == 0:
+        succ_states[frozenset(opposing_fleet.items())] += dices[1]
+    else:    
+        for ships in product(*chosen_targets):
+            fleet = deepcopy(opposing_fleet)
+            for ((target, (dice, power))) in ships[0]:
+                if fleet[target].count:
+                    fleet[target] = damage(
+                        target, fleet[target], power, dice, ship.computer)
+            succ_states[frozenset(
+                filter(lambda x: x[1].count, fleet.items()))] += dices[1]
+    
     return succ_states
 
+
+def next_dice(dices):
+    for power in range(4):
+        for (dice, count) in dices[0][power]:
+            yield (dice, power+1, count)
+        
+
+
+
+def assign_dices2(ship, opposing_fleet, dice_count, dices):
+    succ_states = defaultdict(int)
+    opposing_fleet = dict(opposing_fleet)
+    for ships in product(opposing_fleet, repeat=dice_count):
+        fleet = deepcopy(opposing_fleet)
+        for ship, (dice, power) in zip(ships, next_dice2(dices)):
+            if fleet[ship].count:
+                fleet[ship] = damage(
+                    ship, fleet[ship], power+1, dice, ship.computer)
+        succ_states[frozenset(
+            filter(lambda x: x[1].count, fleet.items()))] += dices[1]
+    return succ_states
+
+
+def next_dice2(dices):
+    for power in range(4):
+        for (dice, count) in dices[0][power]:
+            for _ in range(count):
+                yield (dice, power+1)
+        
 
 def damage(ship, sstate, power, dice, comp) -> ShipState:
     if not ship.is_hit(dice, comp):
@@ -215,9 +269,9 @@ def damage(ship, sstate, power, dice, comp) -> ShipState:
 
 
 def reset(state):
-    a = frozenset((k, replace(v, fired_canons=False, regen_used=False))
+    a = frozenset((k, replace(v, fired_cannons=False, regen_used=False))
                   for (k, v) in state[0])
-    d = frozenset((k, replace(v, fired_canons=False, regen_used=False))
+    d = frozenset((k, replace(v, fired_cannons=False, regen_used=False))
                   for (k, v) in state[1])
     return a, d
 
@@ -243,7 +297,7 @@ def next_ship(state):
     for ship in battle_sorted:
         sstate = comb[ship]
         if sstate.count:
-            if ship.cannons.has_power() and not sstate.fired_canons:
+            if ship.cannons.has_power() and not sstate.fired_cannons:
                 return ((ship, sstate), 1)
     for ship in battle_sorted:
         sstate = comb[ship]
@@ -299,27 +353,14 @@ class spaceBattle(markovChain):
             new_states = {reset(state): 1}
 
         else:
-            opposing_fleet, my_fleet = (
-                state[0], state[1]) if ship.defender else (state[1], state[0])
             results = {}
             if action == 0:
-                results = ship.fire_missles(opposing_fleet, sstate.count)
-                temp = dict(my_fleet)
-                temp[ship] = replace(temp[ship], fired_missles=True)
-                my_fleet = frozenset(temp.items())
-                new_states = {(r, my_fleet): v for (r, v) in results.items()} if ship.defender else {
-                    (my_fleet, r): v for (r, v) in results.items()}
+                results = ship.fire_missles(sstate, state)
             elif action == 1:
-                results = ship.fire_cannons(opposing_fleet, sstate.count)
-                temp = dict(my_fleet)
-                temp[ship] = replace(temp[ship], fired_canons=True)
-                my_fleet = frozenset(temp.items())
-                new_states = {(r, my_fleet): v for (r, v) in results.items()} if ship.defender else {
-                    (my_fleet, r): v for (r, v) in results.items()}
+                results = ship.fire_cannons(sstate, state)
             elif action == 2:
-                results = ship.regen_damage(my_fleet)
-                new_states = {(opposing_fleet, r): v for (r, v) in results.items(
-                )} if ship.defender else {(r, opposing_fleet): v for (r, v) in results.items()}
+                results = ship.regen_damage(sstate, state)
+            new_states = results
 
         for (new_state, v) in new_states.items():
             terminal, dwin = is_terminal(new_state)
@@ -401,11 +442,37 @@ def main():
 
 
 if __name__ == "__main__":
-    a = (frozenset({(inter1, ShipState(fired_canons=False, fired_missles=True, regen_used=False, count=1, damage=0)),
-                    (dred1, ShipState(fired_canons=False, fired_missles=False, regen_used=False, count=1, damage=0))}),
-         frozenset({(star1, ShipState(fired_canons=True, fired_missles=False, regen_used=False, count=1, damage=2))}))
-    print(star1.fire_cannons({dred1: ShipState(count=1)}, 2))
-    print(reset(a))
+    a = (frozenset({(inter1, ShipState(fired_cannons=False, fired_missles=True, regen_used=False, count=1, damage=0)),
+                    (dred1, ShipState(fired_cannons=False, fired_missles=False, regen_used=False, count=1, damage=0))}),
+         frozenset({(star1, ShipState(fired_cannons=True, fired_missles=False, regen_used=False, count=1, damage=2))}))
+    # print(reset(a))
+    opp =  frozenset({(star1, ShipState(fired_cannons=True, fired_missles=False, regen_used=False, count=2, damage=0)),
+                (crus1, ShipState(count=2))})
+    dices = inter1.missles.count(2).fire()
+    res = defaultdict(int)
+    for dice in dices.items():
+        for r in assign_dices(inter1, opp, 2 * sum(inter1.missles), dice).items():
+            res[r[0]] += r[1]
 
-    print(next_ship(a))
-    main()
+    for r in res.items():
+        print(r)
+    res2 = defaultdict(int)
+    for dice in dices.items():
+        for r in assign_dices2(inter1, opp, 2 * sum(inter1.missles), dice).items():
+            res2[r[0]] += r[1]
+        
+    print()
+    print()
+    for r in res2.items():
+        print(r)
+
+    print()
+    print()
+
+    for k in res:
+        print(res[k], res2[k], res2[k]/res[k])
+
+    for k in res:
+        if res2[k] == 0:
+            print(k, res[k])
+    # main()

@@ -1,21 +1,28 @@
 <!DOCTYPE html>
 <html>
-  <head>
-      <script src="https://cdn.jsdelivr.net/pyodide/v0.21.3/full/pyodide.js"></script>
-  </head>
-  <body>
-    Pyodide test page <br>
-    Open your browser console to see Pyodide output
-    <script type="text/javascript">
-      async function main(){
-        let pyodide = await loadPyodide();
-        console.log(pyodide.runPython(`
-            import sys
-            sys.version
+
+<head>
+  <script src="https://cdn.jsdelivr.net/pyodide/v0.21.3/full/pyodide.js"></script>
+</head>
+
+<body>
+  Pyodide test page <br>
+  Open your browser console to see Pyodide output
+  <script type="text/javascript">
+    async function main() {
+      let pyodide = await loadPyodide();
+      await pyodide.loadPackage("micropip");
+      const micropip = pyodide.pyimport("micropip");
+      await micropip.install('discreteMarkovChain');
+      console.log(pyodide.runPython(`
+            import micropip
+            package_list = micropip.list()
+            print(package_list) 
         `));
-        pyodide.runPython("print(1 + 2)");
-      }
-      main();
-    </script>
-  </body>
+      pyodide.runPython("print(1 + 2)");
+    }
+    main();
+  </script>
+</body>
+
 </html>
